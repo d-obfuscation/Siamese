@@ -12,10 +12,39 @@ load_dotenv()
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
-
+created_parts = []  # Define the created_parts list outside of the split command
 database_file = "database.json"
 
-created_parts = []  # Define the created_parts list outside of the split command
+owner = int(os.getenv("OWNER"))
+whitelist = set()
+
+def owner_check(ctx):
+    return ctx.author.id == owner
+
+def is_whitelisted(ctx):
+    return ctx.author.id in whitelist
+
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user.name}")
+
+@bot.command()
+@commands.check(owner_check)
+async def whitelist(ctx, user: discord.User):
+    if user.id in whitelist:
+        await ctx.send(f"{user.name} is already whitelisted.")
+    else:
+        whitelist.add(user.id)
+        await ctx.send(f"{user.name} has been whitelisted.")
+
+@bot.command()
+@commands.check(owner_check)
+async def blacklist(ctx, user: discord.User):
+    if user.id not in whitelist:
+        await ctx.send(f"{user.name} is already blacklisted.")
+    else:
+        whitelist.discard(user.id)
+        await ctx.send(f"{user.name} has been blacklisted.")
 
 
 def entry_exists(json_entry):
@@ -33,12 +62,8 @@ def entry_exists(json_entry):
     return False
 
 
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user.name}")
-
-
 @bot.command()
+@commands.check_any(owner_check, is_whitelisted)
 async def split(ctx, file_name: str):
     file_path = os.path.join(os.getcwd(), file_name)
 
@@ -109,6 +134,7 @@ async def split(ctx, file_name: str):
 
 
 @bot.command()
+@commands.check_any(owner_check, is_whitelisted)
 async def rebuild(ctx):
     guild = ctx.guild
 
@@ -200,13 +226,15 @@ async def rebuild(ctx):
     os.remove(json_file_path)
 
 @bot.command()
+@commands.check_any(owner_check, is_whitelisted)
 async def list(ctx):
     embed = discord.Embed(title="Command List", description="List of available commands:", color=discord.Color.blue())
 
     embed.add_field(name="!split <file_name>", value="Splits a file into parts and sends them as attachments in the created channel.")
     embed.add_field(name="!rebuild", value="Rebuilds a file from split parts using the `database.json`.")
     embed.add_field(name="!list", value="Lists all the commands and their descriptions.")
-
+    embed.add_field(name="!whitelist @USER", value="Whitelists users so they can run bot commands too.")
+    embed.add_field(name="!blacklist @USER", value="Removes users from whitelists.")
     await ctx.send(embed=embed)
 
 async def get_or_create_category(guild, name):
