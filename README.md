@@ -1,8 +1,10 @@
+# Latest Update
+
+Discord tried fucking me over by implementing file expiry, which was a shit idea, because I just changed how the bot works, dumbasses, now instead of the legacy method (which was splitting a large file into 25MB segments and uploading them.) the bot now splits the file up into base64 encoded messages of 2000 characters each.
+
 # Discord Cloud Drive Bot, aka Siamese
 
-This is a Discord bot that allows you to split files into parts, send them as messages in a text channel, download attachments from a specified channel, and rebuild a file from split parts using a JSON database. Meanwhile, the bot keeps track of the splitting and rebuilding process and stores records of every part to additionally make the end-users usage simple and efficient.
-
-**Note:** For optimal use, please make sure you are in the **Siamese** directory when running main.py otherwise it can generate files/folders outside that directory in the directory you're running it from.
+This is a Discord bot that allows you to split files into base64 encoded parts, send them as messages in a text channel, read messages from a specified channel, and rebuild a file from split messages using a JSON database and base64 decoding. Meanwhile, the bot keeps track of the splitting and rebuilding process and stores records of every entry to additionally make the end-users usage simple and efficient.
 
 ## Installation
 
@@ -20,7 +22,7 @@ pip install -r requirements.txt
 ```
 
 **4. Create a new Discord bot and obtain the bot token. Refer to the Discord API documentation for instructions on how to create a bot and obtain the token.**
-**5. Create a file called `.env` in the same directory as `main.py` and on the first line write `TOKEN=` and then paste your bot token right after the `=` without any spaces.**
+**5. Create a file called `.env` in the same directory as `main.py` and on the first line write `TOKEN=` and then paste your bot token right after the `=` without any spaces. Then on the second line write 'OWNER=' and then paste your discord User ID, this is to verify only you can add people to the bot's whitelist.**
 
 ## Usage
 
@@ -36,9 +38,12 @@ python3 main.py
 
 ### Split Command
 
-**Syntax:** `!split <file_name>`
+**Syntax:** `!split <file_name>` (Full path to file)
+<br>
+Example of correct usage: !split /home/username/large_file.exe
+Example of incorrect usage: !split ~/large_file.exe
 
-**Description:** This command takes a `file_name` as an argument and splits the file into parts. Each part is sent as a separate message in a text channel. The file is split into parts of 25 MB each and a JSON entry is generated and put into `database.json` as well as a copy is pasted into the channel for you to send to others if they need to rebuild from your entry..
+**Description:** This command takes a `file_name` as an argument and splits the file into base64 encoded 2000 character parts. Each part is sent as a separate message in a text channel. A JSON entry is generated and put into `database.json` as well as a copy is pasted into the channel for you to send to others if they need to rebuild from your entry..
 
 
 ### Rebuild Command
@@ -46,7 +51,7 @@ python3 main.py
 
 **Syntax:** `!rebuild`
 
-**Description:** This command prompts the user to make a selection from the list of entries it has in its `database.json` file and when selected, automatically pulls the files from that discord server and channel, and rebuilds it.
+**Description:** This command prompts the user to make a selection from the list of entries it has in its `database.json` file and when selected, automatically pulls the messages and decodes them from b64 from the corresponding discord server and channel, and rebuilds the original file.
 
 ### List Command
 

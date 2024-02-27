@@ -7,20 +7,23 @@ import json
 from dotenv import load_dotenv
 import re
 import asyncio
+import base64
 
 load_dotenv()
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
-created_parts = []  # Define the created_parts list outside of the split command
+
 database_file = "database.json"
 
 owner = int(os.getenv("OWNER"))
 whitelist = set()
 
+@commands.check
 def owner_check(ctx):
     return ctx.author.id == owner
 
+@commands.check
 def is_whitelisted(ctx):
     return ctx.author.id in whitelist
 
@@ -46,7 +49,6 @@ async def blacklist(ctx, user: discord.User):
         whitelist.discard(user.id)
         await ctx.send(f"{user.name} has been blacklisted.")
 
-
 def entry_exists(json_entry):
     if not os.path.isfile(database_file):
         return False
@@ -61,6 +63,17 @@ def entry_exists(json_entry):
                 continue
     return False
 
+async def send_file_content_as_messages(ctx, file_path, guild, category):
+    with open(file_path, 'rb') as file:
+        content = base64.b64encode(file.read()).decode('utf-8')
+
+    channel_name = f"split-{sanitize_channel_name(get_filename(file_path))}"
+    channel = await get_or_create_channel(guild, channel_name, category)
+
+    for i in range(0, len(content), 2000):
+        await channel.send(content[i:i + 2000])
+
+    return channel_name
 
 @bot.command()
 @commands.check_any(owner_check, is_whitelisted)
@@ -78,160 +91,60 @@ async def split(ctx, file_name: str):
     }
     category = await get_or_create_category(guild, "split_files")
 
-    # Create a new channel for split files
-    channel_name = f"split-{sanitize_channel_name(get_filename(file_name))}"
-    channel = await get_or_create_channel(guild, channel_name, category)
+    channel_name = await send_file_content_as_messages(ctx, file_path, guild, category)
 
-    output_directory = os.path.join(os.getcwd(), "split_files")
-    os.makedirs(output_directory, exist_ok=True)
-
-    # Split the file into parts
-    with open(file_path, "rb") as file:
-        chunk_size = 25 * 1024 * 1024  # 25 MB
-        part_num = 1
-        parts_list = []  # List to store the part names
-
-        while True:
-            chunk = file.read(chunk_size)
-            if not chunk:
-                break
-
-            part_name = f"{get_filename(file_name)}.part{part_num}"
-            part_path = os.path.join(output_directory, part_name)
-
-            with open(part_path, "wb") as part_file:
-                part_file.write(chunk)
-
-            await channel.send(file=discord.File(part_path))
-            parts_list.append(part_name)
-            created_parts.append(part_path)  # Add the part path to the created_parts list
-            part_num += 1
-
-    # Create the JSON entry
     json_entry = {
         "file_name": get_filename(file_name),
         "channel_name": channel_name,
-        "parts_list": parts_list,
         "guild_data": guild_data
     }
 
-    # Check if the entry already exists in the database
     if not entry_exists(json_entry):
-        # Write the JSON entry to the database
         with open(database_file, "a") as database:
             database.write(json.dumps(json_entry) + "\n")
 
-    # Upload the JSON entry to the channel
     json_str = json.dumps(json_entry, indent=4)
     await ctx.send(f"```json\n{json_str}\n```")
-    await ctx.send(f"File '{file_name}' split into parts in channel '{channel_name}'. "
-                   f"JSON entry created and uploaded.")
-
-    # Delete the created parts
-    for part_path in created_parts:
-        os.remove(part_path)
-    created_parts.clear()
-
+    await ctx.send(f"File '{file_name}' split into messages in channel '{channel_name}'. JSON entry created.")
 
 @bot.command()
 @commands.check_any(owner_check, is_whitelisted)
-async def rebuild(ctx):
-    guild = ctx.guild
-
-    # Read the JSON entries from the database
-    entries = []
-    with open(database_file, "r") as database:
-        for line in database:
-            try:
-                entry = json.loads(line.strip())
-                entries.append(entry)
-            except json.JSONDecodeError:
-                continue
-
-    # Display the entries to the user
-    if not entries:
-        await ctx.send("No split files found.")
-        return
-
-    for index, entry in enumerate(entries, start=1):
-        channel_name = entry["channel_name"]
-        guild_id = entry["guild_data"]["guild_id"]
-        guild_name = entry["guild_data"]["guild_name"]
-        await ctx.send(f"{index}. File: {entry['file_name']}, Channel: {channel_name}, Guild ID: {guild_id}, Guild Name: {guild_name}")
-
-    await ctx.send("Select the number of the entry to rebuild:")
-
-    # Wait for user input
+async def rebuild(ctx, entry: str):
     try:
-        message = await bot.wait_for("message", check=lambda m: m.author == ctx.author, timeout=30)
-        selection = int(message.content.strip())
-    except (asyncio.TimeoutError, ValueError):
-        await ctx.send("Invalid selection or timeout.")
+        entry = json.loads(entry)
+    except json.JSONDecodeError:
+        await ctx.send("Invalid JSON entry.")
         return
 
-    if selection < 1 or selection > len(entries):
-        await ctx.send("Invalid selection.")
-        return
+    channel_name = entry["channel_name"]
+    channel = discord.utils.get(ctx.guild.channels, name=channel_name)
 
-    selected_entry = entries[selection - 1]
-    channel_name = selected_entry["channel_name"]
-    guild_id = int(selected_entry["guild_data"]["guild_id"])
-    guild_name = selected_entry["guild_data"]["guild_name"]
-
-    guild = bot.get_guild(guild_id)
-    if not guild:
-        await ctx.send(f"Guild '{guild_name}' not found.")
-        return
-
-    channel = discord.utils.get(guild.channels, name=channel_name)
-    if not channel:
+    if channel is None:
         await ctx.send(f"Channel '{channel_name}' not found.")
         return
 
-    output_directory = os.path.join(os.getcwd(), "rebuild_files")
-    os.makedirs(output_directory, exist_ok=True)
+    messages = await channel.history(limit=None, oldest_first=True).flatten()
+    base64_content = ''.join([msg.content for msg in messages if msg.author == bot.user])
 
-    # Download the split files from the channel
-    for part_name in selected_entry["parts_list"]:
-        part_path = os.path.join(output_directory, part_name)
+    try:
+        decoded_content = base64.b64decode(base64_content)
+    except (base64.binascii.Error, ValueError):
+        await ctx.send("Error in decoding base64 content.")
+        return
 
-        async for message in channel.history(limit=None):
-            if message.attachments:
-                attachment = message.attachments[0]
-                if attachment.filename == part_name:
-                    await attachment.save(part_path)
-                    break
+    output_file_path = os.path.join(os.getcwd(), entry["file_name"])
+    with open(output_file_path, 'wb') as file:
+        file.write(decoded_content)
 
-    await ctx.send(f"Split files downloaded from channel '{channel_name}' in the guild '{guild.name}'.")
-
-    # Rebuild the file
-    file_name = selected_entry["file_name"]
-    rebuilt_file_path = os.path.join(output_directory, file_name)
-
-    with open(rebuilt_file_path, "wb") as rebuilt_file:
-        for part_name in selected_entry["parts_list"]:
-            part_path = os.path.join(output_directory, part_name)
-            with open(part_path, "rb") as part_file:
-                rebuilt_file.write(part_file.read())
-
-    await ctx.send(f"File '{file_name}' rebuilt. Final file created.")
-
-    # Cleanup - Delete downloaded parts
-    for part_name in selected_entry["parts_list"]:
-        part_path = os.path.join(output_directory, part_name)
-        os.remove(part_path)
-
-    # Cleanup - Delete channel and uploaded JSON file
-    json_file_path = os.path.join(output_directory, f"{get_filename(file_name)}.json")
-    os.remove(json_file_path)
+    await ctx.send(f"File rebuilt: {entry['file_name']}")
 
 @bot.command()
 @commands.check_any(owner_check, is_whitelisted)
 async def list(ctx):
     embed = discord.Embed(title="Command List", description="List of available commands:", color=discord.Color.blue())
 
-    embed.add_field(name="!split <file_name>", value="Splits a file into parts and sends them as attachments in the created channel.")
-    embed.add_field(name="!rebuild", value="Rebuilds a file from split parts using the `database.json`.")
+    embed.add_field(name="!split <file_name>", value="Splits a file into parts and sends them as messages in the created channel.")
+    embed.add_field(name="!rebuild", value="Rebuilds a file from split messages using the `database.json`.")
     embed.add_field(name="!list", value="Lists all the commands and their descriptions.")
     embed.add_field(name="!whitelist @USER", value="Whitelists users so they can run bot commands too.")
     embed.add_field(name="!blacklist @USER", value="Removes users from whitelists.")
